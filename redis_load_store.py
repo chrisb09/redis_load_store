@@ -2,6 +2,7 @@
 import argparse
 import redis
 import os
+import shutil
 import base64
 
 class StringTrie:
@@ -31,8 +32,7 @@ class StringTrie:
 
 def create_trie(string_list):
     ssl = list(sorted(string_list))
-    prefix = longest_common_prefix([ssl[0], ssl[-1]])
-    root = StringTrie(prefix, 0, len(ssl))
+    root = StringTrie("", 0, len(ssl))
     _create_trie(ssl, root)
     return root
 
@@ -64,61 +64,73 @@ def _create_trie(ssl, parent):
 
 
 def load_data(folder, host, port, unix_socket_path, password, db, keys, use_expireat, empty):
-    connection = count_key_types(host, port, unix_socket_path, password, db)
+    connection = count_key_types(host, port, unix_socket_path, password, db, keys)
+    if not os.path.exists(folder):
+        print("The specified folder "+folder+" does not exist.")
+        exit()
+    if (empty):
+        connection.flushdb()
     for root, dirs, files in os.walk(folder, topdown=False):
         for name in files:
             file = os.path.join(root, name)
             restored_encoded_key = file[len(folder):].replace(os.sep,"")
             restored_key = base64.urlsafe_b64decode(restored_encoded_key.encode('utf-8'))
-            print("'"+file+"' -> "+str(restored_key)+"")
-            # TODO: decodeData & store it depending on the type at restored_key
-            with open(file, 'r') as f:
-                lines = f.readlines()
-                lines = [x.strip() for x in lines]
-                key_type = lines[0]
-                expire = int(lines[1])
-                if key_type == "string":
-                    if len(lines) < 3:
-                        lines.append("")
-                    if (expire != -1):
-                        connection.set(restored_key, base64.urlsafe_b64decode(lines[2]), ex=expire)
-                    else:
+            #print("'"+file+"' -> "+str(restored_key)+"")
+            try:
+                with open(file, 'r') as f:
+                    lines = f.readlines()
+                    lines = [x.strip() for x in lines]
+                    key_type = lines[0]
+                    expire = int(lines[1])
+                    if key_type == "string":
+                        if len(lines) < 3:
+                            lines.append("")
                         connection.set(restored_key, base64.urlsafe_b64decode(lines[2]))
-                elif key_type == "hash":
-                    for i in range(2, len(lines)-1, 2):
-                        connection.hset(restored_key, base64.urlsafe_b64decode(lines[i]), base64.urlsafe_b64decode(lines[i+1]))
-                elif key_type == "list":
-                    for i in range(2, len(lines)-1):
-                        connection.rpush(restored_key, base64.urlsafe_b64decode(lines[i]))
-                elif key_type == "set":
-                    for i in range(2, len(lines)-1):
-                        connection.sadd(restored_key, base64.urlsafe_b64decode(lines[i]))
-                elif key_type == "zset":
-                    for i in range(2, len(lines)-1):
-                        connection.zadd(restored_key, {base64.urlsafe_b64decode(lines[i]): float(lines[i+1])})
-                elif key_type == "stream":
-                    i = 2
-                    while i < len(lines) - 1:
-                        id = base64.urlsafe_b64decode(lines[i])
-                        d_size = int(lines[i+1])
-                        i += 2
-                        d_end = i + 2*d_size
-                        d = dict()
-                        while i < d_end:
-                            d[base64.urlsafe_b64decode(lines[i])] = base64.urlsafe_b64decode(lines[i+1])
+                    elif key_type == "hash":
+                        for i in range(2, len(lines)-1, 2):
+                            connection.hset(restored_key, base64.urlsafe_b64decode(lines[i]), base64.urlsafe_b64decode(lines[i+1]))
+                    elif key_type == "list":
+                        for i in range(2, len(lines)-1):
+                            connection.rpush(restored_key, base64.urlsafe_b64decode(lines[i]))
+                    elif key_type == "set":
+                        for i in range(2, len(lines)-1):
+                            connection.sadd(restored_key, base64.urlsafe_b64decode(lines[i]))
+                    elif key_type == "zset":
+                        for i in range(2, len(lines)-1):
+                            connection.zadd(restored_key, {base64.urlsafe_b64decode(lines[i]): float(lines[i+1])})
+                    elif key_type == "stream":
+                        i = 2
+                        while i < len(lines) - 1:
+                            id = base64.urlsafe_b64decode(lines[i])
+                            d_size = int(lines[i+1])
                             i += 2
-                        connection.xadd(restored_key, d, id)
-
+                            d_end = i + 2*d_size
+                            d = dict()
+                            while i < d_end:
+                                d[base64.urlsafe_b64decode(lines[i])] = base64.urlsafe_b64decode(lines[i+1])
+                                i += 2
+                            connection.xadd(restored_key, d, id)
+                    if expire != -1:
+                        connection.expire(restored_key, expire)
+            except Exception as e:
+                print(e)
+                
 
 def store_data(folder, host, port, unix_socket_path, password, db, keys, use_expireat, empty):
     # Implement the logic to store data from folder structure to Redis
-    connection = count_key_types(host, port, unix_socket_path, password, db)
-    all_keys = connection.keys("*")
+    connection = count_key_types(host, port, unix_socket_path, password, db, keys)
+    all_keys = connection.keys("*" if keys is None else keys)
     all_base64_keys = list()
     for key in all_keys:
         all_base64_keys.append(base64.urlsafe_b64encode(key).decode('utf-8'))
 
     trie = create_trie(all_base64_keys)
+
+    if empty:
+        if os.path.exists(folder):
+            shutil.rmtree(folder)
+            os.mkdir(folder)
+
 
     # Create folders and files based on the trie
     create_folders_and_files(connection, trie, current_path=folder)
@@ -155,6 +167,7 @@ def encodeData(connection, key):
                 result += base64.urlsafe_b64encode(d[k]).decode('utf-8')+"\n"
     return result
 
+
 def create_folders_and_files(connection, trie, current_path=""):
     for child in trie.children:
         child_name = child.key[len(trie.key):]
@@ -168,9 +181,6 @@ def create_folders_and_files(connection, trie, current_path=""):
             os.makedirs(child_path, exist_ok=True)  # Use exist_ok to avoid raising an error if the folder already exists
             create_folders_and_files(connection, child, child_path)
 
-        # Create a file for leaves
-
-
 
 def longest_common_prefix(strs):
     l = len(strs[0])
@@ -183,7 +193,7 @@ def longest_common_prefix(strs):
     return strs[0][0:length]
 
 
-def count_key_types(host, port, unix_socket_path, password, db):
+def count_key_types(host, port, unix_socket_path, password, db, keys):
     if unix_socket_path:
         connection = redis.StrictRedis(unix_socket_path=unix_socket_path, db=db)
     else:
@@ -194,7 +204,7 @@ def count_key_types(host, port, unix_socket_path, password, db):
         connection.auth(password)
 
     # Get all keys in the database
-    all_keys = connection.keys('*')
+    all_keys = connection.keys('*' if keys is None else keys)
 
     # Count the number of each key type
     key_type_count = {}
@@ -220,14 +230,13 @@ def main():
     common_args.add_argument('--unix_socket_path', help='Path to the Unix socket for Redis connection')
     common_args.add_argument('--password', help='Password for Redis connection')
     common_args.add_argument('--db', default=0, type=int, help='Redis database to connect to')
-    common_args.add_argument('--encoding', help='Encoding to use for encoding or decoding data')
+    common_args.add_argument('--empty', default=False, action='store_true', help='Empty the datbase/folderbefore loading/storing the data')
 
     load_args = parser.add_argument_group('Load-specific Arguments')
-    load_args.add_argument('--use_expireat', action='store_true', help='Use expireat instead of ttl when loading expiring keys')
-    load_args.add_argument('--empty', action='store_true', help='Empty the Redis data set before loading the data')
+    load_args.add_argument('--use_expireat', action='store_true', help='(Missing) Use expireat instead of ttl when loading expiring keys')
 
     store_args = parser.add_argument_group('Store-specific Arguments')
-    store_args.add_argument('--keys', help='Only dump keys matching the specified pattern')
+    store_args.add_argument('--keys', help='Only dump keys matching the specified pattern. Default: *')
 
     args = parser.parse_args()
 
