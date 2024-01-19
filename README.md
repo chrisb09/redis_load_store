@@ -80,6 +80,16 @@ Loads the entire database 0from the folder backup_redis, clears the database bef
 
 If you deal with streams, not using --empty will result in (non-critical) errors being thrown.
 
+### Visual example
+
+I created an entry for each of the 6 types the script supports, then flushed all values in the redis instance, and subsequently used the load subcommand to restore the values.
+
+![](img/Screenshot_backup_example.png)
+
+The corresponding "test" folder looks as such:
+
+![](img/Screenshot_test_folder.png)
+
 # Data Types covered
 
 - string
@@ -104,5 +114,5 @@ Tested with Redis-Server 7.0.11
 ### Operating system
 
 So far only tested on linux (debian 12), but other linux distros should work fine too, macos as well.
-In theory this should also work on linux, base64 url encode is used after all, but there's a potential issue with filename limits. While to some degree this affects all operating systems, windows has by default a comparatively small path size limit, which can be extended by changing settings. For more information: 
+In theory this should also work on windows, base64 url encode is used after all, but there's a potential issue with filename limits. While to some degree this affects all operating systems, windows has by default a comparatively small path size limit, which can be extended by changing settings. For more information: 
 https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
